@@ -10,24 +10,82 @@ jobs:
   build_wheels:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-
     strategy:
+      fail-fast: false  # 单个平台失败不影响其他平台
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        # 可选：扩展架构支持（如macOS arm64、Linux aarch64）
+        include:
+          - os: macos-latest
+            cibw_archs: "x86_64 arm64"
+          - os: ubuntu-latest
+            cibw_archs: "x86_64 aarch64"  # aarch64需要QEMU
+          - os: windows-latest
+            cibw_archs: "AMD64"
+
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: recursive  # 如果utox有子模块，必须添加
+
+    # 缓存pip依赖，减少构建时间
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/pip
+          **/__pycache__
+        key: ${{ matrix.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ matrix.os }}-pip-
 
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: "3.11"
+        cache: "pip"  # 自动缓存pip依赖
 
+    # 安装系统级构建依赖（分平台处理）
+    - name: Install system dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libc6-dev gcc g++ make libssl-dev  # utox的常见系统依赖
+
+    - name: Install system dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        xcode-select --install || true  # 安装Xcode命令行工具
+        brew install openssl  # utox可能依赖openssl
+
+    - name: Install system dependencies (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: ilammy/msvc-dev-cmd@v1  # 配置VS构建环境
+
+    # 安装构建工具（移除冗余的nuitka）
     - name: Install build tools
       run: |
-        python -m pip install --upgrade pip
-        pip install cibuildwheel nuitka
+        python -m pip install --upgrade pip setuptools wheel
+        pip install cibuildwheel
 
+    # 构建wheel（完善cibuildwheel环境变量）
     - name: Build wheels
       run: python -m cibuildwheel --output-dir wheelhouse
       env:
         CIBW_BUILD: "cp39-* cp310-* cp311-*"
+        # Linux：指定manylinux标准，支持多架构
+        CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+        CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
+        # macOS：指定部署目标，支持arm64/x86_64
+        CIBW_MACOS_DEPLOYMENT_TARGET: "10.15"
+        CIBW_ARCHS: ${{ matrix.cibw_archs }}
+        # Windows：使用VS构建工具
+        CIBW_BUILD_VERBOSITY: 3  # 增加日志详细度，便于调试
+
+    # 上传构建产物（关键：否则无法获取wheel包）
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: utox-wheels-${{ matrix.os }}
+        path: ./wheelhouse/*.whl
+        retention-days: 30  # 产物保留30天
