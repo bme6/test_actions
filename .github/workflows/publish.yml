@@ -1,91 +1,215 @@
-name: Build utox Wheels
+name: Build and Publish
 
 on:
   push:
+    branches:
+      - main
     tags:
-      - "v*"
-  workflow_dispatch:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  build_wheels:
-    name: Build on ${{ matrix.os }}
+  build-wheels:
+    name: Build wheels for ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false  # 单个平台失败不影响其他平台
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        # 可选：扩展架构支持（如macOS arm64、Linux aarch64）
-        include:
-          - os: macos-latest
-            cibw_archs: "x86_64 arm64"
+        platform:
           - os: ubuntu-latest
-            cibw_archs: "x86_64 aarch64"  # aarch64需要QEMU
+            image: manylinux_2_28-x86_64
+            triplet: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            image: manylinux_2_26-aarch64
+            triplet: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            image: macosx_10_15-x86_64
+            triplet: x86_64-apple-darwin
+          - os: macos-latest
+            image: macosx_11_0-arm64
+            triplet: arm64-apple-darwin
           - os: windows-latest
-            cibw_archs: "AMD64"
+            image: win_amd64
+            triplet: x64-pc-windows-msvc
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive  # 如果utox有子模块，必须添加
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    # 缓存pip依赖，减少构建时间
-    - name: Cache pip dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/pip
-          **/__pycache__
-        key: ${{ matrix.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ matrix.os }}-pip-
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-        cache: "pip"  # 自动缓存pip依赖
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build cibuildwheel nuitka
+          pip install setuptools wheel
 
-    # 安装系统级构建依赖（分平台处理）
-    - name: Install system dependencies (Ubuntu)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libc6-dev gcc g++ make libssl-dev  # utox的常见系统依赖
+      - name: Build wheels with cibuildwheel
+        run: |
+          python -m cibuildwheel --platform ${{ matrix.image }} --output-dir wheelhouse
+        env:
+          CIBW_BUILD: "cp39-*"
+          CIBW_SKIP: ""
+          CIBW_ARCHS_LINUX: "${{ matrix.triplet == 'x86_64-unknown-linux-gnu' && 'x86_64' || matrix.triplet == 'aarch64-unknown-linux-gnu' && 'aarch64' || '' }}"
+          CIBW_ARCHS_MACOS: "${{ matrix.triplet == 'x86_64-apple-darwin' && 'x86_64' || matrix.triplet == 'arm64-apple-darwin' && 'arm64' || '' }}"
+          CIBW_ARCHS_WINDOWS: "${{ matrix.triplet == 'x64-pc-windows-msvc' && 'AMD64' || '' }}"
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_26
+          CIBW_MACOS_DEPLOYMENT_TARGET: "${{ matrix.triplet == 'x86_64-apple-darwin' && '10.15' || '11.0' }}"
+          CIBW_BEFORE_ALL_LINUX: |
+            yum install -y gcc gcc-c++ clang python3-devel python3-pip
+            pip install --upgrade pip setuptools wheel nuitka
+          CIBW_BEFORE_ALL_MACOS: |
+            brew install openssl llvm
+            export OPENSSL_ROOT_DIR=$(brew --prefix openssl)
+            export LLVM_ROOT_DIR=$(brew --prefix llvm)
+            pip install --upgrade pip setuptools wheel nuitka
+          CIBW_BEFORE_ALL_WINDOWS: |
+            choco install -y llvm
+            pip install --upgrade pip setuptools wheel nuitka
+          CIBW_TEST_COMMAND: "python test_actions; print -c \"import('Test OK')\""
+          CIBW_TEST_REQUIRES: "pytest"
 
-    - name: Install system dependencies (macOS)
-      if: matrix.os == 'macos-latest'
-      run: |
-        xcode-select --install || true  # 安装Xcode命令行工具
-        brew install openssl  # utox可能依赖openssl
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.image }}
+          path: wheelhouse/
+          retention-days: 7
 
-    - name: Install system dependencies (Windows)
-      if: matrix.os == 'windows-latest'
-      uses: ilammy/msvc-dev-cmd@v1  # 配置VS构建环境
+  build-source:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    # 安装构建工具（移除冗余的nuitka）
-    - name: Install build tools
-      run: |
-        python -m pip install --upgrade pip setuptools wheel
-        pip install cibuildwheel
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    # 构建wheel（完善cibuildwheel环境变量）
-    - name: Build wheels
-      run: python -m cibuildwheel --output-dir wheelhouse
-      env:
-        CIBW_BUILD: "cp39-* cp310-* cp311-*"
-        # Linux：指定manylinux标准，支持多架构
-        CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
-        CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
-        # macOS：指定部署目标，支持arm64/x86_64
-        CIBW_MACOS_DEPLOYMENT_TARGET: "10.15"
-        CIBW_ARCHS: ${{ matrix.cibw_archs }}
-        # Windows：使用VS构建工具
-        CIBW_BUILD_VERBOSITY: 3  # 增加日志详细度，便于调试
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build setuptools wheel
 
-    # 上传构建产物（关键：否则无法获取wheel包）
-    - name: Upload wheels
-      uses: actions/upload-artifact@v4
-      with:
-        name: utox-wheels-${{ matrix.os }}
-        path: ./wheelhouse/*.whl
-        retention-days: 30  # 产物保留30天
+      - name: Build sdist
+        run: |
+          python -m build --sdist --outdir dist
+          ls -la dist/
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-dist
+          path: dist/
+          retention-days: 7
+
+  test-wheels:
+    name: Test wheels on ${{ matrix.os }}
+    needs: build-wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
+        exclude:
+          - os: ubuntu-latest
+            python-version: '3.14'  # 暂时跳过 3.14
+          - os: macos-latest
+            python-version: '3.14'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: wheelhouse
+          merge-multiple: true
+
+      - name: Install and test
+        run: |
+          pip install wheelhouse/*.whl
+          python -c "import test_actions; print('Import successful')"
+          python -c "from test_actions import utils; print('Utils module loaded')"
+
+  publish:
+    name: Publish to PyPI
+    needs: [build-wheels, build-source, test-wheels]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/test_actions
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download source distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: source-dist
+          path: dist
+
+      - name: Publish to Test PyPI
+        if: github.event.action == 'created' || !startsWith(github.ref, 'refs/tags/v')
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          user: __token__
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify:
+    name: Notify on failure
+    needs: [build-wheels, build-source, test-wheels, publish]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure notification
+        run: |
+          echo "::warning::Build failed. Please check the workflow logs for details."
