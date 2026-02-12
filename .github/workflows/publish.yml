@@ -36,10 +36,9 @@ jobs:
 
       - name: Build wheels
         run: |
-          python -m cibuildwheel --platform manylinux_2_28-x86_64 --output-dir wheelhouse
+          python -m cibuildwheel --platform linux --archs x86_64 --output-dir wheelhouse
         env:
           CIBW_BUILD: "cp39-*"
-          CIBW_ARCHS_LINUX: "x86_64"
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_BEFORE_ALL_LINUX: |
             yum install -y gcc gcc-c++ clang python3-devel python3-pip
@@ -73,10 +72,9 @@ jobs:
 
       - name: Build wheels
         run: |
-          python -m cibuildwheel --platform manylinux_2_26-aarch64 --output-dir wheelhouse
+          python -m cibuildwheel --platform linux --archs aarch64 --output-dir wheelhouse
         env:
           CIBW_BUILD: "cp39-*"
-          CIBW_ARCHS_LINUX: "aarch64"
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_26
           CIBW_BEFORE_ALL_LINUX: |
             yum install -y gcc gcc-c++ clang python3-devel python3-pip
@@ -110,10 +108,9 @@ jobs:
 
       - name: Build wheels
         run: |
-          python -m cibuildwheel --platform macosx_10_15-x86_64 --output-dir wheelhouse
+          python -m cibuildwheel --platform macos --archs x86_64 --output-dir wheelhouse
         env:
           CIBW_BUILD: "cp39-*"
-          CIBW_ARCHS_MACOS: "x86_64"
           CIBW_MACOS_DEPLOYMENT_TARGET: "10.15"
           CIBW_BEFORE_ALL_MACOS: |
             brew install openssl llvm
@@ -149,10 +146,9 @@ jobs:
 
       - name: Build wheels
         run: |
-          python -m cibuildwheel --platform macosx_11_0-arm64 --output-dir wheelhouse
+          python -m cibuildwheel --platform macos --archs arm64 --output-dir wheelhouse
         env:
           CIBW_BUILD: "cp39-*"
-          CIBW_ARCHS_MACOS: "arm64"
           CIBW_MACOS_DEPLOYMENT_TARGET: "11.0"
           CIBW_BEFORE_ALL_MACOS: |
             brew install openssl llvm
@@ -188,10 +184,9 @@ jobs:
 
       - name: Build wheels
         run: |
-          python -m cibuildwheel --platform win_amd64 --output-dir wheelhouse
+          python -m cibuildwheel --platform windows --archs AMD64 --output-dir wheelhouse
         env:
           CIBW_BUILD: "cp39-*"
-          CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_BEFORE_ALL_WINDOWS: |
             choco install -y llvm
             pip install --upgrade pip setuptools wheel nuitka
